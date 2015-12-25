@@ -1,0 +1,23 @@
+Short:        Removes SVN metadata from a dir tree
+Author:       Fredrik Wikstrom
+Uploader:     Fredrik Wikstrom <fredrik@a500.org>
+Type:         dev/misc
+Version:      1.1
+Architecture: generic
+
+Requirements:
+ - ruby >= 1.8
+
+Installation:
+
+sudo cp stripsvn /usr/local/bin/
+
+Usage:
+
+stripsvn <directory>
+
+Changes:
+
+1.1 (9-May-2011)
+ - First released version
+

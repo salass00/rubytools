@@ -1,0 +1,712 @@
+#!/usr/bin/ruby -w
+#
+# Copyright 2011 Fredrik Wikstrom. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS `AS IS'
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+require 'getoptlong'
+
+fdtrans_version = '1.3'
+
+opts = GetoptLong.new(
+	[ '--help', '-h', GetoptLong::NO_ARGUMENT ],
+	[ '--struct', '-i', GetoptLong::REQUIRED_ARGUMENT ],
+	[ '--library', '-l', GetoptLong::REQUIRED_ARGUMENT ],
+	[ '--xml', '-x', GetoptLong::NO_ARGUMENT ],
+	[ '--stubs', '-s', GetoptLong::NO_ARGUMENT ],
+	[ '--c68k', '-c', GetoptLong::NO_ARGUMENT ],
+	[ '--all', '-a', GetoptLong::NO_ARGUMENT ],
+	[ '--inline4', '-4', GetoptLong::NO_ARGUMENT ]
+)
+
+iface = nil
+openname = nil
+do_xml = false
+do_stubs = false
+do_c68k = false
+do_all = false
+do_inline = false
+show_version = true
+show_usage = false
+if ARGV.length == 0
+	show_usage = true
+end
+opts.each do |opt, arg|
+	case opt
+		when '--help'
+			show_usage = true
+		when '--struct'
+			iface = arg
+		when '--library'
+			openname = arg
+		when '--xml'
+			do_xml = true
+		when '--stubs'
+			do_stubs = true
+		when '--c68k'
+			do_c68k = true
+		when '--all'
+			do_all = true
+		when '--inline4'
+			do_inline = true
+	end
+end
+if ARGV.length == 1
+	sfdfile = ARGV.shift
+else
+	show_usage = true
+end
+if show_version
+	puts "fdtrans v#{fdtrans_version} - Copyright (c) 2011 Fredrik Wikstrom"
+end
+if show_usage
+	puts "Usage: fdtrans [OPTIONS] [SFDFILE]"
+	puts "Options:"
+	puts "  -h, --help                Display this information"
+	puts "  -i, --struct <structname> Interface struct name"
+	puts "  -l, --library <openname>  Name for use with OpenLibrary()"
+	puts "  -x, --xml                 Generate .xml file"
+	puts "  -s, --stubs               Generate PPC->M68K cross-call stubs"
+	puts "  -c, --c68k                Generate M68K->PPC cross-call stubs"
+	puts "  -4, --inline4             Generate special inline4 file for using M68K"
+	puts "                            libraries without a PPC interface"
+	exit
+end
+
+module SFD
+	class Arg
+		attr_accessor :type, :name, :reg, :rnum
+		def initialize(type, name, reg)
+			@type = type
+			@name = name
+			@reg = reg.upcase
+			@rnum = nil
+			n = reg[-1].chr.to_i
+			case reg[0..-2].upcase
+				when 'D'
+					if n >= 0 and n <= 7
+						@rnum = reg[1].chr.to_i
+					end
+				when 'A'
+					if n >= 0 and n <= 5
+						@rnum = 8 + reg[1].chr.to_i
+					end
+			end
+		end
+		def int8?
+			return @type == "BYTE"
+		end
+		def int16?
+			return (@type == "WORD" or @type == "BOOL")
+		end
+	end
+
+	class Function
+		attr_accessor :lvo, :result, :name, :args, :varargs_name
+		def initialize(lvo, result, name, private = false)
+			@lvo = lvo
+			@result = result
+			@name = name
+			@private = private
+			@args = Array.new
+			@varargs_name = nil
+		end
+		def private?
+			return @private
+		end
+		def void?
+			return @result.downcase == "void"
+		end
+		def varargs?
+			return (not @varargs_name.nil?)
+		end
+	end
+
+	class Library
+		attr_accessor :openname, :basetype, :basename, :ifacetype, :ifacename, :includes, :functions
+		def initialize()
+			@openname = nil
+			@basetype = nil
+			@basename = nil
+			@ifacetype = nil
+			@ifacename = nil
+			@includes = Array.new
+			@functions = Array.new
+		end
+		def device?
+			return File.extname(openname) == ".device"
+		end
+		def load_sfd(sfdfile, openname = nil)
+			File.open(sfdfile, "r") do |file|
+				bias = nil
+				proto = ""
+				function = nil
+				varargs = false
+				private = false
+				if openname.nil?
+					name = File.basename(sfdfile).chomp(".sfd").chomp("_lib")
+					@openname = "#{name.downcase}.library"
+				else
+					name = File.basename(openname).chomp(File.extname(openname))
+					@openname = openname
+				end
+				@basetype = nil
+				@basename = nil
+				@ifacetype = nil
+				@ifacename = nil
+				file.each do |line|
+					line.strip!
+					if line[0,2] == "=="
+						opt, arg = line.split(/\s/, 2)
+						if not arg.nil?
+							arg.strip!
+						end
+						case opt
+							when '==libname'
+								@openname = arg
+							when '==basetype'
+								arg.slice!(/^struct/)
+								arg.slice!(/\*$/)
+								arg.strip!
+								@basetype = arg
+							when '==base'
+								arg.slice!(/^_/)
+								@basename = arg
+								name = arg.chomp("Base")
+							when '==include'
+								arg.slice!(/^</)
+								arg.slice!(/>$/)
+								@includes << arg
+							when '==bias'
+								bias = arg.to_i
+							when '==varargs'
+								varargs = true
+							when '==reserve'
+								bias += (arg.to_i * 6)
+							when '==public'
+								private = false
+							when '==private'
+								private = true
+							when '==end'
+								break
+						end
+					elsif varargs
+						proto += line
+						if proto[-1].chr == ","
+							next
+						end
+						res_func = proto.split("(", 2)[0]
+						funcname = res_func.scan(/\w+$/)[0]
+						if not function.nil?
+							function.varargs_name = funcname
+						end
+						varargs = false
+						proto = ""
+					else
+						proto += line
+						if proto[-1].chr == ","
+							next
+						end
+						res_func = proto.split("(", 2)[0]
+						funcname = res_func.scan(/\w+$/)[0]
+						result = res_func.chomp(funcname).rstrip
+						args_s, regs_s = proto.scan(/\([^\)]*\)/)
+						args_a = args_s[1..-2].split(",")
+						regs_a = regs_s[1..-2].split(",")
+						function = Function.new(-bias, result, funcname, private)
+						bias += 6
+						args_a.each_index do |i|
+							args_a[i].strip!
+							regs_a[i].strip!
+							arg = args_a[i].scan(/\w+$/)[0]
+							type = args_a[i].chomp(arg).rstrip
+							reg = regs_a[i]
+							function.args << Arg.new(type, arg, reg)
+						end
+						@functions << function
+						proto = ""
+					end
+				end
+				if @basetype.nil?
+					if device?
+						@basetype = "Device"
+					else
+						@basetype = "Library"
+					end
+				end
+				if @basename.nil?
+					@basename = "#{name}Base"
+				end
+				@ifacetype = "#{name}IFace"
+				@ifacename = "I#{name}"
+			end
+		end
+	end
+end
+
+library = SFD::Library.new
+library.load_sfd(sfdfile, openname)
+
+if openname.nil?
+	openname = library.openname
+end
+basetype = library.basetype
+basename = library.basename
+if iface.nil?
+	ifacetype = library.ifacetype
+	ifacename = library.ifacename
+	iface = ifacename[1..-1]
+else
+	ifacetype = "#{iface}IFace"
+	ifacename = "I#{iface}"
+end
+
+libname = File.basename(openname)
+name = libname[/^\w+\./].chop
+
+if do_all or do_xml
+	outfile = "#{name}.xml"
+	File.open(outfile, "w") do |file|
+		file.puts "<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>"
+		file.puts "<!DOCTYPE library SYSTEM \"library.dtd\">"
+		file.puts "<library name=\"#{name}\" basename=\"#{basename}\" basetype=\"#{basetype}\" openname=\"#{openname}\">"
+		library.includes.each do |include|
+			file.puts "\t<include>#{include}</include>"
+		end
+		file.puts "\t<interface name=\"main\" version=\"1.0\" struct=\"#{ifacetype}\" prefix=\"_#{iface}_\" asmprefix=\"#{ifacename}\" global=\"#{ifacename}\">"
+		file.puts "\t\t<method name=\"Obtain\" result=\"uint32\"/>"
+		file.puts "\t\t<method name=\"Release\" result=\"uint32\"/>"
+		file.puts "\t\t<method name=\"Expunge\" result=\"void\" status=\"unimplemented\"/>"
+		file.puts "\t\t<method name=\"Clone\" result=\"struct Interface *\" status=\"unimplemented\"/>"
+		library.functions.each do |function|
+			if function.args.count == 0
+				file.puts "\t\t<method name=\"#{function.name}\" result=\"#{function.result}\"/>"
+			else
+				file.puts "\t\t<method name=\"#{function.name}\" result=\"#{function.result}\">"
+				function.args.each do |arg|
+					file.puts "\t\t\t<arg name=\"#{arg.name}\" type=\"#{arg.type}\"/>"
+				end
+				file.puts "\t\t</method>"
+				if function.varargs?
+					file.puts "\t\t<method name=\"#{function.varargs_name}\" result=\"#{function.result}\">"
+					function.args[0..-2].each do |arg|
+						file.puts "\t\t\t<arg name=\"#{arg.name}\" type=\"#{arg.type}\"/>"
+					end
+					file.puts "\t\t\t<vararg name=\"tag1\" type=\"Tag\"/>"
+					file.puts "\t\t</method>"
+				end
+			end
+		end
+		file.puts "\t</interface>"
+		file.puts "</library>"
+	end
+end
+
+if do_all or do_stubs
+	outfile = "#{name}.c"
+	File.open(outfile, "w") do |file|
+		file.puts "/* This file was created automatically by fdtrans v#{fdtrans_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		file.puts "#include <stdarg.h>"
+		file.puts "#include <exec/types.h>"
+		file.puts "#include <exec/interfaces.h>"
+		file.puts "#include <exec/emulation.h>"
+		library.includes.each do |include|
+			file.puts "#include <#{include}>"
+		end
+		file.puts "#include <exec/execbase.h>"
+		file.puts "#include <exec/resident.h>"
+		file.puts "#include <proto/exec.h>"
+		file.puts
+		file.puts "#include <interfaces/#{name}.h>"
+		file.puts "#include \"#{name}_vectors.c\""
+		library.functions.each do |function|
+			file.puts
+			file.puts "#{function.result} _#{iface}_#{function.name}("
+			args_a = Array.new
+			args_a << "struct #{ifacetype} *Self"
+			function.args.each do |arg|
+				args_a << "#{arg.type} #{arg.name}"
+			end
+			args_s = args_a.join(",\n\t")
+			file.puts "\t#{args_s})"
+			file.puts "{"
+			file.puts "\tstruct Library *LibBase = Self->Data.LibBase;"
+			file.puts "\tstruct ExecIFace *IExec = (struct ExecIFace *)Self->Data.IExecPrivate;"
+			if not function.void?
+				file.puts "\t#{function.result} retval;"
+			end
+			file.puts
+			file.puts "\tstruct ExecBase *pExecBase = (struct ExecBase *)(IExec->Data.LibBase);"
+			file.puts "\tuint32 *regs = (uint32 *)(pExecBase->EmuWS);"
+			function.args.each do |arg|
+				if arg.rnum >= 2
+					file.puts "\tuint32 save_#{arg.reg.upcase} = regs[#{arg.rnum}];"
+				end
+			end
+			file.puts "\tuint32 save_A6 = regs[14];"
+			file.puts
+			if not function.void?
+				file.puts "\tretval = (#{function.result})IExec->EmulateTags((APTR)LibBase,"
+			else
+				file.puts "\tIExec->EmulateTags((APTR)LibBase,"
+			end
+			file.puts "\t\tET_Offset,     #{function.lvo},"
+			function.args.each do |arg|
+				file.puts "\t\tET_Register#{arg.reg.upcase}, #{arg.name},"
+			end
+			file.puts "\t\tET_RegisterA6, LibBase,"
+			file.puts "\t\tTAG_END);"
+			function.args.each do |arg|
+				if arg.rnum >= 2
+					file.puts "\tregs[#{arg.rnum}] = save_#{arg.reg.upcase};"
+				end
+			end
+			file.puts "\tregs[14] = save_A6;"
+			if not function.void?
+				file.puts "\treturn retval;"
+			end
+			file.puts "}"
+			if function.varargs?
+				file.puts
+				file.puts "#{function.result} VARARGS68K _#{iface}_#{function.varargs_name}("
+				args_a = Array.new
+				args_a << "struct #{ifacetype} *Self"
+				function.args[0..-2].each do |arg|
+					args_a << "#{arg.type} #{arg.name}"
+				end
+				args_a << "..."
+				args_s = args_a.join(",\n\t")
+				file.puts "\t#{args_s})"
+				file.puts "{"
+				vararg = function.args[-1]
+				file.puts "\tva_list ap;"
+				file.puts "\t#{vararg.type} varargs;"
+				if function.args.count >= 2
+					file.puts "\tva_startlinear(ap, #{function.args[-2].name});"
+				else
+					file.puts "\tva_startlinear(ap, Self);"
+				end
+				file.puts "\tvarargs = va_getlinearva(ap, #{vararg.type});"
+				if not function.void?
+					file.puts "\treturn Self->#{function.name}("
+				else
+					file.puts "\tSelf->#{function.name}("
+				end
+				args_a = Array.new
+				function.args[0..-2].each do |arg|
+					args_a << arg.name
+				end
+				args_a << "varargs"
+				args_s = args_a.join(",\n\t\t")
+				file.puts "\t\t#{args_s});"
+				file.puts "}"
+			end
+		end
+		file.puts
+		file.puts "uint32 _#{iface}_Obtain(struct #{ifacetype} *Self)"
+		file.puts "{"
+		file.puts "\treturn ++Self->Data.RefCount;"
+		file.puts "}"
+		file.puts
+		file.puts "uint32 _#{iface}_Release(struct #{ifacetype} *Self)"
+		file.puts "{"
+		file.puts "\treturn --Self->Data.RefCount;"
+		file.puts "}"
+		file.puts
+		file.puts "#define LIBNAME \"#{libname}\""
+		file.puts "#define LIBVERSION 0"
+		file.puts "#define IFACENAME \"#{libname}.main\""
+		file.puts
+		file.puts "static APTR InitFunction("
+		file.puts "\tUNUSED APTR dummy,"
+		file.puts "\tUNUSED BPTR SegList,"
+		file.puts "\tstruct ExecBase *ExecBase)"
+		file.puts "{"
+		file.puts "\tstruct Library *LibBase;"
+		file.puts "\tstruct Interface *Interface;"
+		file.puts "\tstruct ExecIFace *IExec = (struct ExecIFace *)ExecBase->MainInterface;"
+		file.puts
+		file.puts "\tLibBase = IExec->OpenLibrary(LIBNAME, LIBVERSION);"
+		file.puts "\tif (LibBase)"
+		file.puts "\t{"
+		file.puts "\t\tInterface = IExec->MakeInterfaceTags(LibBase"
+		file.puts "\t\t\tMIT_VectorTable, main_vectors,"
+		file.puts "\t\t\tMIT_Version,     1,"
+		file.puts "\t\t\tMIT_Name,        IFACENAME,"
+		file.puts "\t\t\tTAG_END);"
+		file.puts "\t\tif (Interface)"
+		file.puts "\t\t{"
+		file.puts "\t\t\tInterface->Data.IExecPrivate = IExec;"
+		file.puts "\t\t\tIExec->AddInterface(LibBase, Interface);"
+		file.puts "\t\t}"
+		file.puts "\t}"
+		file.puts
+		file.puts "\treturn Interface;"
+		file.puts "}"
+		file.puts
+		file.puts "STATIC CONST USED struct Resident resident ="
+		file.puts "{"
+		file.puts "\tRTC_MATCHWORD,"
+		file.puts "\t(APTR)&resident,"
+		file.puts "\t(APTR)(&resident+1),"
+		file.puts "\tRTF_NATIVE,"
+		file.puts "\tLIBVERSION,"
+		file.puts "\tNT_UNKNOWN,"
+		file.puts "\t-120,"
+		file.puts "\tIFACENAME,"
+		file.puts "\tIFACENAME,"
+		file.puts "\tInitFunction"
+		file.puts "};"
+		file.puts
+		file.puts "int32 _start(void)"
+		file.puts "{"
+		file.puts "\treturn 100;"
+		file.puts "}"
+	end
+end
+
+if do_all or do_c68k
+	outfile = "#{name}_68k.c"
+	File.open(outfile, "w") do |file|
+		file.puts "/* This file was created automatically by fdtrans v#{fdtrans_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		file.puts "#ifdef __USE_INLINE__"
+		file.puts "#undef __USE_INLINE__"
+		file.puts "#endif"
+		file.puts "#ifndef __NOGLOBALIFACE__"
+		file.puts "#define __NOGLOBALIFACE__"
+		file.puts "#endif"
+		file.puts
+		file.puts "#include <exec/interfaces.h>"
+		file.puts "#include <exec/libraries.h>"
+		file.puts "#include <exec/emulation.h>"
+		file.puts "#include <interfaces/exec.h>"
+		file.puts "#include <interfaces/#{name}.h>"
+		file.puts "#include <proto/#{name}.h>"
+		file.puts
+		file.puts "static inline int8  convert_int8  (uint32 x) { return x; }"
+		file.puts "static inline int16 convert_int16 (uint32 x) { return x; }"
+		file.puts
+		if library.device?
+			file.puts "STATIC VOID stub_OpenPPC(ULONG *regarray)"
+			file.puts "{"
+			file.puts "\tstruct Library *Base = (struct Library *)regarray[REG68K_A6/4];"
+			file.puts "\tstruct ExtendedLibrary *ExtLib = (struct ExtendedLibrary *)((ULONG)Base + Base->lib_PosSize);"
+			file.puts "\tstruct DeviceManagerInterface *Self = (struct DeviceManagerInterface *)ExtLib->IDevice;"
+			file.puts
+			file.puts "\tSelf->Open("
+			file.puts "\t\t(struct IORequest *)regarray[REG68K_A1/4],"
+			file.puts "\t\t(ULONG)regarray[REG68K_D0/4],"
+			file.puts "\t\t(ULONG)regarray[REG68K_D1/4]);"
+			file.puts "}"
+			file.puts "STATIC CONST struct EmuTrap stub_Open = { TRAPINST, TRAPTYPE, (ULONG (*)(ULONG *))stub_OpenPPC };"
+			file.puts
+			file.puts "STATIC APTR stub_ClosePPC(ULONG *regarray)"
+			file.puts "{"
+			file.puts "\tstruct Library *Base = (struct Library *)regarray[REG68K_A6/4];"
+			file.puts "\tstruct ExtendedLibrary *ExtLib = (struct ExtendedLibrary *)((ULONG)Base + Base->lib_PosSize);"
+			file.puts "\tstruct DeviceManagerInterface *Self = (struct DeviceManagerInterface *)ExtLib->IDevice;"
+			file.puts
+			file.puts "\treturn Self->Close((struct IORequest *)regarray[REG68K_A1/4]);"
+			file.puts "}"
+			file.puts "STATIC CONST struct EmuTrap stub_Close = { TRAPINST, TRAPTYPE, (ULONG (*)(ULONG *))stub_ClosePPC };"
+		else
+			file.puts "STATIC struct Library * stub_OpenPPC(ULONG *regarray)"
+			file.puts "{"
+			file.puts "\tstruct Library *Base = (struct Library *)regarray[REG68K_A6/4];"
+			file.puts "\tstruct ExtendedLibrary *ExtLib = (struct ExtendedLibrary *)((ULONG)Base + Base->lib_PosSize);"
+			file.puts "\tstruct LibraryManagerInterface *Self = (struct LibraryManagerInterface *)ExtLib->ILibrary;"
+			file.puts
+			file.puts "\treturn Self->Open(0);"
+			file.puts "}"
+			file.puts "STATIC CONST struct EmuTrap stub_Open = { TRAPINST, TRAPTYPE, (ULONG (*)(ULONG *))stub_OpenPPC };"
+			file.puts
+			file.puts "STATIC APTR stub_ClosePPC(ULONG *regarray)"
+			file.puts "{"
+			file.puts "\tstruct Library *Base = (struct Library *)regarray[REG68K_A6/4];"
+			file.puts "\tstruct ExtendedLibrary *ExtLib = (struct ExtendedLibrary *)((ULONG)Base + Base->lib_PosSize);"
+			file.puts "\tstruct LibraryManagerInterface *Self = (struct LibraryManagerInterface *)ExtLib->ILibrary;"
+			file.puts
+			file.puts "\treturn Self->Close();"
+			file.puts "}"
+			file.puts "STATIC CONST struct EmuTrap stub_Close = { TRAPINST, TRAPTYPE, (ULONG (*)(ULONG *))stub_ClosePPC };"
+		end
+		file.puts
+		file.puts "STATIC APTR stub_ExpungePPC(UNUSED ULONG *regarray)"
+		file.puts "{"
+		file.puts "\treturn NULL;"
+		file.puts "}"
+		file.puts "STATIC CONST struct EmuTrap stub_Expunge = { TRAPINST, TRAPTYPE, (ULONG (*)(ULONG *))stub_ExpungePPC };"
+		file.puts
+		file.puts "STATIC ULONG stub_ReservedPPC(UNUSED ULONG *regarray)"
+		file.puts "{"
+		file.puts "\treturn 0;"
+		file.puts "}"
+		file.puts "STATIC CONST struct EmuTrap stub_Reserved = { TRAPINST, TRAPTYPE, (ULONG (*)(ULONG *))stub_ReservedPPC };"
+		if library.device?
+			file.puts
+			file.puts "STATIC VOID stub_BeginIOPPC(ULONG *regarray)"
+			file.puts "{"
+			file.puts "\tstruct Library *Base = (struct Library *)regarray[REG68K_A6/4];"
+			file.puts "\tstruct ExtendedLibrary *ExtLib = (struct ExtendedLibrary *)((ULONG)Base + Base->lib_PosSize);"
+			file.puts "\tstruct DeviceManagerInterface *Self = (struct DeviceManagerInterface *)ExtLib->IDevice;"
+			file.puts
+			file.puts "\tSelf->BeginIO((struct IORequest *)regarray[REG68K_A1/4]);"
+			file.puts "}"
+			file.puts "STATIC CONST struct EmuTrap stub_BeginIO = { TRAPINST, TRAPTYPENR, (ULONG (*)(ULONG *))stub_BeginIOPPC };"
+			file.puts
+			file.puts "STATIC LONG stub_AbortIOPPC(ULONG *regarray)"
+			file.puts "{"
+			file.puts "\tstruct Library *Base = (struct Library *)regarray[REG68K_A6/4];"
+			file.puts "\tstruct ExtendedLibrary *ExtLib = (struct ExtendedLibrary *)((ULONG)Base + Base->lib_PosSize);"
+			file.puts "\tstruct DeviceManagerInterface *Self = (struct DeviceManagerInterface *)ExtLib->IDevice;"
+			file.puts "\tstruct IORequest *ior = (struct IORequest *)regarray[REG68K_A1/4];"
+			file.puts
+			file.puts "\tSelf->AbortIO(ior);"
+			file.puts "\treturn ior->io_Error;"
+			file.puts "}"
+			file.puts "STATIC CONST struct EmuTrap stub_AbortIO = { TRAPINST, TRAPTYPE, (ULONG (*)(ULONG *))stub_AbortIOPPC };"
+		end
+		library.functions.each do |function|
+			file.puts
+			file.puts "static #{function.result} stub_#{function.name}PPC(uint32 *regarray)"
+			file.puts "{"
+			file.puts "\tstruct Library *Base = (struct Library *) regarray[REG68K_A6/4];"
+			file.puts "\tstruct ExtendedLibrary *ExtLib = (struct ExtendedLibrary *) ((uint32)Base + Base->lib_PosSize);"
+			file.puts "\tstruct #{ifacetype} *Self = (struct #{ifacetype} *) ExtLib->MainIFace;"
+			file.puts
+			if not function.void?
+				file.puts "\treturn Self->#{function.name}("
+			else
+				file.puts "\tSelf->#{function.name}("
+			end
+			args_a = Array.new
+			function.args.each do |arg|
+				if arg.int8?
+					args_a << "(#{arg.type})convert_int8(regarray[#{arg.rnum}])"
+				elsif arg.int16?
+					args_a << "(#{arg.type})convert_int16(regarray[#{arg.rnum}])"
+				else
+					args_a << "(#{arg.type})regarray[#{arg.rnum}]"
+				end
+			end
+			args_s = args_a.join(",\n\t\t")
+			file.puts "\t\t#{args_s}"
+			file.puts "\t);"
+			file.puts "}"
+			if function.void?
+				file.puts "STATIC CONST struct EmuTrap stub_#{function.name} = { TRAPINST, TRAPTYPENR, (uint32 (*)(uint32 *))stub_#{function.name}PPC };"
+			else
+				file.puts "STATIC CONST struct EmuTrap stub_#{function.name} = { TRAPINST, TRAPTYPE, (uint32 (*)(uint32 *))stub_#{function.name}PPC };"
+			end
+		end
+		file.puts
+		file.puts "CONST CONST_APTR VecTable68K[] ="
+		file.puts "{"
+		function_names = [ "Open", "Close", "Expunge", "Reserved" ]
+		if library.device?
+			function_names << "BeginIO"
+			function_names << "AbortIO"
+		end
+		function_names.each do |function_name|
+			file.puts "\t&stub_#{function_name},"
+		end
+		library.functions.each do |function|
+			file.puts "\t&stub_#{function.name},"
+		end
+		file.puts "\t(CONST_APTR)-1"
+		file.puts "};"
+	end
+end
+
+if do_inline
+	outfile = "#{name}.h"
+	File.open(outfile, "w") do |file|
+		file.puts "/* This file was created automatically by fdtrans v#{fdtrans_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		defname = "inline4/#{name}.h".gsub(/\W/, "_").upcase
+		file.puts "#ifndef #{defname}"
+		file.puts "#define #{defname}"
+		file.puts
+		file.puts "#ifndef EXEC_TYPES_H"
+		file.puts "#include <exec/types.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_EXEC_H"
+		file.puts "#include <exec/exec.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_INTERFACES_H"
+		file.puts "#include <exec/interfaces.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_EMULATION_H"
+		file.puts "#include <exec/emulation.h>"
+		file.puts "#endif"
+		library.includes.each do |include|
+			defname = include.gsub(/\W/, "_").upcase
+			file.puts "#ifndef #{defname}"
+			file.puts "#include <#{include}>"
+			file.puts "#endif"
+		end
+		library.functions.each do |function|
+			file.puts
+			args_a = Array.new
+			function.args.each do |arg|
+				args_a << "_#{arg.name}"
+			end
+			args_s = args_a.join(",")
+			file.puts "#define #{function.name}(#{args_s}) ( \\"
+			file.puts "\t(#{ifacename} != NULL) ? \\"
+			file.puts "\t#{ifacename}->#{function.name}(#{args_s}) : \\"
+			file.puts "\t(#{function.result})EmulateTags(#{basename}, \\"
+			file.puts "\t\tET_Offset,     #{function.lvo}, \\"
+			function.args.each do |arg|
+				file.puts "\t\tET_Register#{arg.reg.upcase}, _#{arg.name}, \\"
+			end
+			file.puts "\t\tET_RegisterA6, #{basename}, \\"
+			file.puts "\t\tET_SaveRegs,   TRUE, \\"
+			file.puts "\t\tTAG_END) \\"
+			file.puts ")"
+			if function.varargs?
+				file.puts
+				file.puts "#ifndef NO_INLINE_STDARG"
+				file.puts "#define #{function.varargs_name}(#{args_s}...) ({ \\"
+				vararg = function.args[-1]
+				file.puts "\tuint32 _func_taglist[] = { _#{vararg.name} }; \\"
+				args_a[-1] = "_func_taglist"
+				args_s = args_a.join(",")
+				file.puts "\t#{function.name}(#{args_s}); \\"
+				file.puts "})"
+				file.puts "#endif"
+			end
+		end
+		file.puts
+		file.puts "#endif"
+	end
+end

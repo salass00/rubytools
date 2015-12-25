@@ -1,0 +1,391 @@
+#!/usr/bin/ruby -w
+#
+# Copyright 2011-2013 Fredrik Wikstrom. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS `AS IS'
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+require 'getoptlong'
+
+catcomp_version = '1.4'
+
+opts = GetoptLong.new(
+	[ '--help', '-h', GetoptLong::NO_ARGUMENT ],
+	[ '--cfile', GetoptLong::REQUIRED_ARGUMENT ],
+	[ '--ctfile', GetoptLong::REQUIRED_ARGUMENT ],
+	[ '--catalog', GetoptLong::REQUIRED_ARGUMENT ]
+)
+
+mode = :none
+cdfile = nil
+ctfile = nil
+outfile = nil
+show_version = true
+show_usage = false
+if ARGV.length == 0
+	show_usage = true
+end
+opts.each do |opt, arg|
+	case opt
+		when '--help'
+			show_usage = true
+		when '--cfile'
+			mode = :cfile
+			outfile = arg
+		when '--ctfile'
+			mode = :ctfile
+			outfile = arg
+		when '--catalog'
+			mode = :catalog
+			outfile = arg
+	end
+end
+if mode == :none
+	show_usage = true
+end
+if show_version
+	puts "catcomp v#{catcomp_version} - Copyright (c) 2011-2013 Fredrik Wikstrom"
+end
+if show_usage
+	puts "Usage: catcomp [OPTIONS] [CDFILE] [CTFILE]"
+	puts "Options:"
+	puts "  -h, --help           Display this information"
+	puts "  --cfile <filename>   Generate .h file"
+	puts "  --ctfile <filename>  Generate .ct file"
+	puts "  --catalog <filename> Generate .catalog file"
+	exit
+end
+case mode
+	when :cfile
+		cdfile = ARGV.shift
+	when :ctfile
+		cdfile = ARGV.shift
+	when :catalog
+		cdfile = ARGV.shift
+		ctfile = ARGV.shift
+end
+
+class OrderedHash
+	def initialize
+		@hash = Hash.new
+		@array = Array.new
+	end
+	def [](key)
+		@hash[key]
+	end
+	def []=(key,val)
+		@array << key unless @hash.has_key?(key)
+		@hash[key] = val
+	end
+	def each
+		@array.each do |key|
+			yield key, @hash[key]
+		end
+	end
+	def each_value
+		@array.each do |key|
+			yield @hash[key]
+		end
+	end
+end
+
+class CatalogString
+	attr_accessor :id, :name, :minlen, :maxlen, :builtin, :translated
+	def initialize(id, name, minlen = 0, maxlen = 0)
+		@id = id
+		@name = name
+		@minlen = minlen
+		@maxlen = maxlen
+		@builtin = nil
+		@translated = nil
+	end
+end
+
+class Catalog
+	attr_accessor :version, :language, :codeset, :strings
+	def initialize()
+		@version = nil
+		@language = nil
+		@codeset = nil
+		@strings = OrderedHash.new
+	end
+	def load_cdfile(filename)
+		File.open(filename, "r") do |file|
+			id = 0
+			string = nil
+			file.each do |line|
+				line.rstrip!
+				if string == nil
+					if line[0].chr == ";"
+						next
+					end
+					name = line.scan(/\w+/)[0]
+					args = line.scan(/\(.*\)/)[0][1..-2].split('/',-1)
+					if not args[0].empty?
+						id = args[0].to_i
+					end
+					minlen = args[1].to_i
+					maxlen = args[2].to_i
+					string = CatalogString.new(id, name, minlen, maxlen)
+					@strings[name] = string
+				else
+					if string.builtin.nil?
+						string.builtin = line.chomp("\\")
+					else
+						string.builtin += line.chomp("\\")
+					end
+					if line[-1].chr != "\\"
+						string = nil
+						id += 1
+					end
+				end
+			end
+		end
+	end
+	def load_ctfile(filename)
+		File.open(filename, "r") do |file|
+			string = nil
+			file.each do |line|
+				line.rstrip!
+				if string == nil
+					if line[0,2] == "##"
+						opt, arg = line[2..-1].split(' ', 2)
+						arg.strip!
+						case opt
+							when 'version'
+								@version = arg
+							when 'language'
+								@language = arg
+							when 'codeset'
+								@codeset = arg.to_i
+						end
+						next
+					end
+					if line[0].chr == ";"
+						next
+					end
+					name = line.scan(/\w+/)[0]
+					string = @strings[name]
+				else
+					if string.translated.nil?
+						string.translated = line.chomp("\\")
+					else
+						string.translated += line.chomp("\\")
+					end
+					if line[-1].chr != "\\"
+						string = nil
+					end
+				end
+			end
+		end
+	end
+end
+
+module IFF
+	class Chunk
+		attr_accessor :content
+		def initialize(id, content = "")
+			@id = id
+			@content = content
+		end
+		def to_s()
+			content = @content
+			header = [ @id, content.length ].pack("A4N")
+			if content.length.odd?
+				content << "\0"
+			end
+			return header + content
+		end
+	end
+	class FORM
+		attr_accessor :chunks
+		def initialize(type)
+			@type = type
+			@chunks = Array.new
+		end
+		def to_s()
+			content = ""
+			@chunks.each do |chunk|
+				content << chunk.to_s
+			end
+			header = [ "FORM", content.length, @type ].pack("A4NA4")
+			return header + content
+		end
+	end
+end
+
+def unescape(string)
+  dup = string.dup
+  escaped_chars = ['n', 't', 'r', 'f', 'v', '0', 'a']
+  escaped_subs = {
+    "n" => "\n",
+    "t" => "\t",
+    "r" => "\r",
+    "f" => "\f",
+    "v" => "\v",
+    "0" => "\0",
+    "a" => "\a"
+  }
+  pos = 0
+  while pos < dup.length
+    if dup[pos] == '\\' and escaped_chars.include? dup[pos + 1]
+      dup[pos..(pos + 1)] = escaped_subs[dup[pos + 1]]
+    end
+    pos += 1
+  end
+  return dup
+end
+
+catalog = Catalog.new
+catalog.load_cdfile(cdfile)
+if not ctfile.nil?
+	catalog.load_ctfile(ctfile)
+end
+
+case mode
+	when :cfile
+		File.open(outfile, "w") do |file|
+			defname = File.basename(outfile).gsub(/\W/, "_").upcase
+			file.puts "#ifndef #{defname}"
+			file.puts "#define #{defname}"
+			file.puts
+			file.puts "/* This file was created automatically by catcomp v#{catcomp_version}."
+			file.puts " * Do NOT edit by hand!"
+			file.puts " */"
+			file.puts
+			file.puts "#ifndef EXEC_TYPES_H"
+			file.puts "#include <exec/types.h>"
+			file.puts "#endif"
+			file.puts
+			file.puts "#ifdef CATCOMP_ARRAY"
+			file.puts "#ifndef CATCOMP_NUMBERS"
+			file.puts "#define CATCOMP_NUMBERS"
+			file.puts "#endif"
+			file.puts "#ifndef CATCOMP_STRINGS"
+			file.puts "#define CATCOMP_STRINGS"
+			file.puts "#endif"
+			file.puts "#endif"
+			file.puts
+			file.puts "#ifdef CATCOMP_BLOCK"
+			file.puts "#ifndef CATCOMP_STRINGS"
+			file.puts "#define CATCOMP_STRINGS"
+			file.puts "#endif"
+			file.puts "#endif"
+			file.puts
+			file.puts "#ifdef CATCOMP_NUMBERS"
+			file.puts
+			catalog.strings.each_value do |string|
+				file.puts "#define #{string.name} #{string.id}"
+			end
+			file.puts
+			file.puts "#endif"
+			file.puts
+			file.puts "#ifdef CATCOMP_STRINGS"
+			file.puts
+			catalog.strings.each_value do |string|
+				file.puts "#define #{string.name}_STR \"#{string.builtin}\""
+			end
+			file.puts
+			file.puts "#endif"
+			file.puts
+			file.puts "#ifdef CATCOMP_ARRAY"
+			file.puts
+			file.puts "struct CatCompArrayType"
+			file.puts "{"
+			file.puts "\tLONG         cca_ID;"
+			file.puts "\tCONST_STRPTR cca_Str;"
+			file.puts "};"
+			file.puts
+			file.puts "STATIC CONST struct CatCompArrayType CatCompArray[] ="
+			file.puts "{"
+			catalog.strings.each_value do |string|
+				file.puts "\t{#{string.name},(CONST_STRPTR)#{string.name}_STR},"
+			end
+			file.puts "};"
+			file.puts
+			file.puts "#endif"
+			file.puts
+			file.puts "#ifdef CATCOMP_BLOCK"
+			file.puts
+			file.puts "STATIC CONST UBYTE CatCompBlock[] ="
+			file.puts "{"
+			catalog.strings.each_value do |string|
+				id = string.id
+				size = unescape(string.builtin).length + 1
+				if size.odd?
+					pad = "\\x00"
+					size += 1
+				else
+					pad = ""
+				end
+				id = id.to_s(16).rjust(8, "0").upcase
+				size = size.to_s(16).rjust(4, "0").upcase
+				file.puts "\t\"\\x#{id[0,2]}\\x#{id[2,2]}\\x#{id[4,2]}\\x#{id[6,2]}\\x#{size[0,2]}\\x#{size[2,2]}\""
+				file.puts "\t#{string.name}_STR \"\\x00#{pad}\""
+			end
+			file.puts "};"
+			file.puts
+			file.puts "#endif"
+			file.puts
+			file.puts "#endif"
+		end
+	when :ctfile
+		File.open(outfile, "w") do |file|
+			file.puts "## version $VER: XX.catalog XX.XX (XX.XX.20XX)"
+			file.puts "## codeset X"
+			file.puts "## language X"
+			file.puts ";"
+			catalog.strings.each_value do |string|
+				file.puts "#{string.name}"
+				file.puts
+				file.puts "; #{string.builtin}"
+				file.puts ";"
+			end
+		end
+	when :catalog
+		File.open(outfile, "wb") do |file|
+			form = IFF::FORM.new("CTLG")
+			if not catalog.version.nil?
+				form.chunks << IFF::Chunk.new("FVER", "#{catalog.version}\0")
+			end
+			if not catalog.language.nil?
+				form.chunks << IFF::Chunk.new("LANG", "#{catalog.language}\0")
+			end
+			if not catalog.codeset.nil?
+				form.chunks << IFF::Chunk.new("CSET", [ catalog.codeset, 0, 0, 0, 0, 0, 0, 0 ].pack("NNNNNNNN"))
+			end
+			chunk = IFF::Chunk.new("STRS")
+			catalog.strings.each_value do |string|
+				if string.translated.nil? or string.translated == string.builtin
+					next
+				end
+				id = string.id
+				text = unescape(string.translated)
+				size = (text.length + 1 + 3) & ~3;
+				chunk.content << [ id, text.length, text ].pack("NNa#{size}")
+			end
+			form.chunks << chunk
+			file.write form.to_s
+		end
+end
+

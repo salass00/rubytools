@@ -1,0 +1,128 @@
+#!/usr/bin/ruby -w
+#
+# Copyright 2011 Fredrik Wikstrom. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS `AS IS'
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+require 'getoptlong'
+
+bumprev_version='1.2'
+
+opts = GetoptLong.new(
+	[ '--help', '-h', GetoptLong::NO_ARGUMENT ],
+	[ '--name', '-n', GetoptLong::REQUIRED_ARGUMENT ],
+	[ '--basename', '-b', GetoptLong::REQUIRED_ARGUMENT ],
+	[ '--version', '-v', GetoptLong::REQUIRED_ARGUMENT ],
+	[ '--revision', '-r', GetoptLong::REQUIRED_ARGUMENT ]
+)
+
+name = nil
+basename = nil
+version = 0
+revision = 0
+show_version = true
+show_usage = false
+if ARGV.length == 0
+	show_usage = true
+end
+opts.each do |opt, arg|
+	case opt
+		when '--help'
+			show_usage = true
+		when '--name'
+			name = arg
+		when '--basename'
+			basename = arg
+		when '--version'
+			version = arg.to_i
+		when '--revision'
+			revision = arg.to_i
+	end
+end
+if ARGV.length > 0
+	version = ARGV.shift.to_i
+end
+if ARGV.length > 0
+	basename = ARGV.shift
+end
+
+if show_version
+	puts "bumprev v#{bumprev_version} - Copyright (c) 2011-2013 Fredrik Wikstrom"
+end
+if show_usage
+	puts "Usage: bumprev [OPTIONS] [VERSION] [BASENAME]"
+	puts "Options:"
+	puts "  -h, --help                Display this information"
+	puts "  -n, --name <progname>     Name of the program"
+	puts "  -b, --basename <basename> Base file name"
+	puts "  -v, --version <version>   Version number"
+	puts "  -r, --revision <revision> Revision number"
+	exit
+end
+
+if not name
+	if basename
+		name = basename
+	else
+		name = "Untitled"
+	end
+end
+if not basename
+	basename = name
+end
+
+if version == 0
+	if File.exists?("#{basename}_rev.ver")
+		version = File.read("#{basename}_rev.ver").to_i
+	else
+		version = 1
+	end
+end
+
+if revision == 0
+	if File.exists?("#{basename}_rev.rev")
+		revision = File.read("#{basename}_rev.rev").to_i
+	end
+	revision += 1
+end
+
+time = Time.now
+
+File.open("#{basename}_rev.h", "w") do |file|
+	vers = "#{name} #{version}.#{revision}"
+	date = "#{time.mday}.#{time.month}.#{time.year}"
+	file.puts "#define VERSION\t\t#{version}"
+	file.puts "#define REVISION\t#{revision}"
+	file.puts "#define DATE\t\t\"#{date}\""
+	file.puts "#define VERS\t\t\"#{vers}\""
+	file.puts "#define VSTRING\t\t\"#{vers} (#{date})\\r\\n\""
+	file.puts "#define VERSTAG\t\t\"\\0$VER: #{vers} (#{date})\""
+end
+
+File.open("#{basename}_rev.rev", "w") do |file|
+	file.puts "#{revision}"
+end
+
+puts "bumprev: Bumped \"#{name}\" to version #{version}.#{revision}."
+

@@ -1,0 +1,38 @@
+Short:        CatComp replacement written in ruby
+Author:       Fredrik Wikstrom
+Uploader:     Fredrik Wikstrom <fredrik@a500.org>
+Type:         dev/c
+Version:      1.4
+Architecture: generic
+
+Requirements:
+ - ruby >= 1.8
+
+Installation:
+
+sudo cp catcomp /usr/local/bin/
+
+Usage:
+
+catcomp [OPTIONS] [CDFILE] [CTFILE]
+Options:
+  -h --help            Display this information
+  --cfile <filename>   Generate .h file
+  --ctfile <filename>  Generate .ct file
+  --catalog <filename> Generate .catalog file
+
+Changes:
+
+1.4 (7-Feb-2013)
+ - Fixed a bug when that would produce 0 id numbers when no string id was
+   specified but minimum/maximum length was
+
+1.3 (29-Jan-2013)
+ - Now uses a custom unescape function instead of the ugly eval hack
+
+1.2 (1-Jun-2011)
+ - Added ability to generate .catalog files
+
+1.1 (8-May-2011)
+ - First released version
+

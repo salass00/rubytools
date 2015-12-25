@@ -1,0 +1,45 @@
+Short:        IDLTool replacement written in ruby
+Author:       Fredrik Wikstrom
+Uploader:     Fredrik Wikstrom <fredrik@a500.org>
+Type:         dev/c
+Version:      1.4
+Architecture: generic
+
+Requirements:
+ - ruby >= 1.8
+ - libxml-ruby
+
+Installation:
+
+sudo cp idltool /usr/local/bin/
+
+Usage:
+
+idltool [OPTIONS] [XMLFILE]
+Options:
+  -h, --help      Display this information
+  -p, --proto     Generate include/proto/<name>.h file
+  -i, --interface Generate include/interfaces/<name>.h file
+  -n, --inline    Generate include/inline4/<name>.h file
+  -c, --vectors   Generate <name>_vectors.c file
+  -a, --all       Generate all of the above
+  -s, --sfd       Generate <name>_lib.sfd file
+      --stubs     Same as --inline but uses static inline functions instead of
+                  macros
+
+Changes:
+
+1.4 (27-Mar-2013)
+ - Added experimental --stubs option
+ - Fixed the extremely annoying "shadowing outer local variable" warnings
+   produced by ruby 1.9.x
+
+1.3 (6-Jul-2011)
+ - Added --sfd option
+
+1.2 (12-May-2011)
+ - Added --vectors and --all options
+
+1.1 (10-May-2011)
+ - First released version
+

@@ -1,0 +1,33 @@
+Short:        BumpRev replacement written in ruby
+Author:       Fredrik Wikstrom
+Uploader:     Fredrik Wikstrom <fredrik@a500.org>
+Type:         dev/c
+Version:      1.2
+Architecture: generic
+
+Requirements:
+ - ruby >= 1.8
+
+Installation:
+
+sudo cp bumprev /usr/local/bin/
+
+Usage:
+
+bumprev [OPTIONS] [VERSION] [BASENAME]
+Options:
+  -h --help                   Display this information
+  -n=<name> --name=<name>     Name of the program
+  -b=<base> --basename=<base> Base file name
+  -v=<ver>  --version=<ver>    Version number
+  -r=<rev>  --revision=<rev>   Revision number
+
+Changes:
+
+1.2 (3-Jun-2013)
+ - Now uses TABs instead of spaces for compatibility with MakeDT.rexx
+   BumpRevFile option
+
+1.1 (8-May-2011)
+ - First released version
+

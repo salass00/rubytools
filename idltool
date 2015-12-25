@@ -1,0 +1,603 @@
+#!/usr/bin/ruby -w
+#
+# Copyright 2011 Fredrik Wikstrom. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS `AS IS'
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+require 'getoptlong'
+require 'rubygems'
+require 'xml'
+
+idltool_version = '1.4'
+
+opts = GetoptLong.new(
+	[ '--help', '-h', GetoptLong::NO_ARGUMENT ],
+	[ '--proto', '-p', GetoptLong::NO_ARGUMENT ],
+	[ '--interface', '-i', GetoptLong::NO_ARGUMENT ],
+	[ '--inline', '-n', GetoptLong::NO_ARGUMENT ],
+	[ '--vectors', '-c', GetoptLong::NO_ARGUMENT ],
+	[ '--all', '-a', GetoptLong::NO_ARGUMENT ],
+	[ '--sfd', '-s', GetoptLong::NO_ARGUMENT ],
+	[ '--stubs', GetoptLong::NO_ARGUMENT ]
+)
+
+do_all = false
+do_proto = false
+do_interface = false
+do_inline = false
+do_vectors = false
+do_sfd = false
+do_stubs = false
+show_version = true
+show_usage = false
+if ARGV.length == 0
+	show_usage = true
+end
+opts.each do |opt, arg|
+	case opt
+		when '--help'
+			show_usage = true
+		when '--proto'
+			do_proto = true
+		when '--interface'
+			do_interface = true
+		when '--inline'
+			do_inline = true
+		when '--vectors'
+			do_vectors = true
+		when '--all'
+			do_all = true
+		when '--sfd'
+			do_sfd = true
+		when '--stubs'
+			do_stubs = true
+	end
+end
+if ARGV.length == 1
+	xmlfile = ARGV.shift
+else
+	show_usage = true
+end
+if show_version
+	puts "idltool v#{idltool_version} - Copyright (c) 2011-2013 Fredrik Wikstrom"
+end
+if show_usage
+	puts "Usage: idltool [OPTIONS] [XMLFILE]"
+	puts "Options:"
+	puts "  -h, --help      Display this information"
+	puts "  -p, --proto     Generate include/proto/<name>.h file"
+	puts "  -i, --interface Generate include/interfaces/<name>.h file"
+	puts "  -n, --inline    Generate include/inline4/<name>.h file"
+	puts "  -c, --vectors   Generate <name>_vectors.c file"
+	puts "  -a, --all       Generate all of the above"
+	puts "  -s, --sfd       Generate <name>_lib.sfd file"
+	puts "      --stubs     Same as --inline but uses static inline functions instead of"
+	puts "                  macros"
+	exit
+end
+
+parser = XML::Parser.file(xmlfile)
+doc = parser.parse
+
+name = nil
+basename = nil
+basetype = nil
+openname = nil
+
+node1 = doc.find_first('/library')
+node1.attributes.each do |attribute|
+	case attribute.name
+		when 'name'
+			name = attribute.value
+		when 'basename'
+			basename = attribute.value
+		when 'basetype'
+			basetype = attribute.value
+		when 'openname'
+			openname = attribute.value
+	end
+end
+
+if File.extname(openname) == ".device"
+	device = true
+else
+	device = false
+end
+
+def createdir(dirname)
+	if not File.directory?(dirname)
+		Dir.mkdir(dirname)
+	end
+end
+
+if do_all or do_proto
+	createdir("include")
+	createdir("include/proto")
+	outfile = "include/proto/#{name}.h"
+	File.open(outfile, "w") do |file|
+		defname = "proto/#{name}.h".gsub(/\W/, '_').upcase
+		file.puts "#ifndef #{defname}"
+		file.puts "#define #{defname}"
+		file.puts
+		file.puts "/* This file was created automatically by idltool v#{idltool_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		nodes = doc.find('/library/include')
+		nodes.each do |node|
+			incname = node.content
+			defname = incname.gsub(/\W/, '_').upcase
+			file.puts "#ifndef #{defname}"
+			file.puts "#include <#{incname}>"
+			file.puts "#endif"
+		end
+		file.puts
+		file.puts "/****************************************************************************/"
+		file.puts
+		file.puts "#ifndef __NOLIBBASE__"
+		file.puts " #ifndef __USE_BASETYPE__"
+		if device
+			file.puts "  extern struct Device * #{basename};"
+		else
+			file.puts "  extern struct Library * #{basename};"
+		end
+		file.puts " #else"
+		file.puts "  extern struct #{basetype} * #{basename};"
+		file.puts " #endif /* __USE_BASETYPE__ */"
+		file.puts "#endif /* __NOLIBBASE__ */"
+		file.puts
+		file.puts "/****************************************************************************/"
+		file.puts
+		file.puts "#ifdef __amigaos4__"
+		file.puts " #include <interfaces/#{name}.h>"
+		file.puts " #ifdef __USE_INLINE__"
+		file.puts "  #include <inline4/#{name}.h>"
+		file.puts " #endif /* __USE_INLINE__ */"
+		incname = "clib/#{name}_protos.h"
+		defname = incname.gsub(/\W/, '_').upcase
+		file.puts " #ifndef #{defname}"
+		file.puts "  #define #{defname} 1"
+		file.puts " #endif /* #{defname} */"
+		file.puts " #ifndef __NOGLOBALIFACE__"
+		nodes = doc.find('/library/interface')
+		nodes.each do |node|
+			struct = node.attributes['struct']
+			global = node.attributes['global']
+			file.puts "  extern struct #{struct} *#{global};"
+		end
+		file.puts " #endif /* __NOGLOBALIFACE__ */"
+		file.puts "#else /* __amigaos4__ */"
+		file.puts " #ifndef #{defname}"
+		file.puts "  #include <#{incname}>"
+		file.puts " #endif /* #{defname} */"
+		file.puts " #if defined(__GNUC__)"
+		file.puts "  #ifndef __PPC__"
+		file.puts "   #include <inline/#{name}.h>"
+		file.puts "  #else"
+		file.puts "   #include <ppcinline/#{name}.h>"
+		file.puts "  #endif /* __PPC__ */"
+		file.puts " #elif defined(__VBCC__)"
+		file.puts "  #ifndef __PPC__"
+		file.puts "   #include <inline/#{name}_protos.h>"
+		file.puts "  #endif /* __PPC__ */"
+		file.puts " #else"
+		file.puts "  #include <pragmas/#{name}_pragmas.h>"
+		file.puts " #endif /* __GNUC__ */"
+		file.puts "#endif /* __amigaos4__ */"
+		file.puts
+		file.puts "/****************************************************************************/"
+		file.puts
+		defname = "proto/#{name}.h".gsub(/\W/, '_').upcase
+		file.puts "#endif /* #{defname} */"
+	end
+end
+
+if do_all or do_interface
+	createdir("include")
+	createdir("include/interfaces")
+	outfile = "include/interfaces/#{name}.h"
+	File.open(outfile, "w") do |file|
+		defname = "#{name}_INTERFACE_DEF_H".gsub(/\W/, '_').upcase
+		file.puts "#ifndef #{defname}"
+		file.puts "#define #{defname}"
+		file.puts
+		file.puts "/* This file was created automatically by idltool v#{idltool_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		file.puts "#ifndef EXEC_TYPES_H"
+		file.puts "#include <exec/types.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_EXEC_H"
+		file.puts "#include <exec/exec.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_INTERFACES_H"
+		file.puts "#include <exec/interfaces.h>"
+		file.puts "#endif"
+		file.puts
+		nodes = doc.find('/library/include')
+		nodes.each do |node|
+			incname = node.content
+			defname = incname.gsub(/\W/, '_').upcase
+			file.puts "#ifndef #{defname}"
+			file.puts "#include <#{incname}>"
+			file.puts "#endif"
+		end
+		file.puts
+		file.puts "#ifdef __cplusplus"
+		file.puts "#ifdef __USE_AMIGAOS_NAMESPACE__"
+		file.puts "namespace AmigaOS {"
+		file.puts "#endif"
+		file.puts "extern \"C\" {"
+		file.puts "#endif"
+		file.puts
+		nodes = doc.find('/library/interface')
+		nodes.each do |node|
+			struct = node.attributes['struct']
+			file.puts "struct #{struct}"
+			file.puts "{"
+			file.puts "\tstruct InterfaceData Data;"
+			file.puts
+			nodes2 = node.find('./method')
+			nodes2.each do |node2|
+				method = node2.attributes['name']
+				result = node2.attributes['result']
+				args_a = Array.new
+				args_a << "struct #{struct} *Self"
+				nodes3 = node2.find('./*')
+				nodes3.each do |node3|
+					arg = node3.attributes['name']
+					type = node3.attributes['type']
+					case node3.name
+						when 'arg'
+							args_a << "#{type} #{arg}"
+						when 'vararg'
+							args_a << "..."
+					end
+				end
+				args_s = args_a.join(", ")
+				file.puts "\t#{result} APICALL (*#{method})(#{args_s});"
+			end
+			file.puts "};"
+			file.puts
+		end
+		file.puts "#ifdef __cplusplus"
+		file.puts "}"
+		file.puts "#ifdef __USE_AMIGAOS_NAMESPACE__"
+		file.puts "}"
+		file.puts "#endif"
+		file.puts "#endif"
+		file.puts
+		defname = "#{name}_INTERFACE_DEF_H".gsub(/\W/, '_').upcase
+		file.puts "#endif /* #{defname} */"
+	end
+end
+
+if do_all or do_inline
+	createdir("include")
+	createdir("include/inline4")
+	outfile = "include/inline4/#{name}.h"
+	File.open(outfile, "w") do |file|
+		defname = "inline4/#{name}.h".gsub(/\W/, '_').upcase
+		file.puts "#ifndef #{defname}"
+		file.puts "#define #{defname}"
+		file.puts
+		file.puts "/* This file was created automatically by idltool v#{idltool_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		file.puts "#ifndef EXEC_TYPES_H"
+		file.puts "#include <exec/types.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_EXEC_H"
+		file.puts "#include <exec/exec.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_INTERFACES_H"
+		file.puts "#include <exec/interfaces.h>"
+		file.puts "#endif"
+		file.puts
+		nodes = doc.find('/library/include')
+		nodes.each do |node|
+			incname = node.content
+			defname = incname.gsub(/\W/, '_').upcase
+			file.puts "#ifndef #{defname}"
+			file.puts "#include <#{incname}>"
+			file.puts "#endif"
+		end
+		file.puts "#include <interfaces/#{name}.h>"
+		file.puts
+		nodes = doc.find('/library/interface')
+		nodes.each do |node|
+			interface = node.attributes['name']
+			global = node.attributes['global']
+			file.puts "/* Inline macros for Interface \"#{interface}\" */"
+			i = 0
+			nodes2 = node.find('./method')
+			nodes2.each do |node2|
+				if i < 4 # skip first four methods (Obtain, Release, Expunge and Clone)
+					i += 1
+					next
+				end
+				method = node2.attributes['name']
+				if node2.find_first('./vararg').nil?
+					args_a = Array.new
+					args2_a = Array.new
+					nodes3 = node2.find('./arg')
+					nodes3.each do |node3|
+						arg = node3.attributes['name']
+						args_a << "#{arg}"
+						args2_a << "(#{arg})"
+					end
+					args_s = args_a.join(", ")
+					args2_s = args2_a.join(", ")
+					file.puts "#define #{method}(#{args_s}) #{global}->#{method}(#{args2_s}) "
+				else
+					file.puts "#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || (__GNUC__ >= 3)"
+					file.puts "#define #{method}(...) #{global}->#{method}(__VA_ARGS__) "
+					file.puts "#elif (__GNUC__ == 2 && __GNUC_MINOR__ >= 95)"
+					file.puts "#define #{method}(vargs...) #{global}->#{method}(## vargs) "
+					file.puts "#endif"
+				end
+			end
+		end
+		file.puts
+		defname = "inline4/#{name}.h".gsub(/\W/, '_').upcase
+		file.puts "#endif /* #{defname} */"
+	end
+end
+
+if do_all or do_vectors
+	outfile = "#{name}_vectors.c"
+	File.open(outfile, "w") do |file|
+		file.puts "/* This file was created automatically by idltool v#{idltool_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		file.puts "#ifndef EXEC_TYPES_H"
+		file.puts "#include <exec/types.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_EXEC_H"
+		file.puts "#include <exec/exec.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_INTERFACES_H"
+		file.puts "#include <exec/interfaces.h>"
+		file.puts "#endif"
+		file.puts
+		nodes = doc.find('/library/include')
+		nodes.each do |node|
+			incname = node.content
+			defname = incname.gsub(/\W/, '_').upcase
+			file.puts "#ifndef #{defname}"
+			file.puts "#include <#{incname}>"
+			file.puts "#endif"
+		end
+		nodes = doc.find('/library/interface')
+		nodes.each do |node|
+			interface = node.attributes['name']
+			struct = node.attributes['struct']
+			prefix = node.attributes['prefix']
+			nodes2 = node.find('./method')
+			file.puts
+			nodes2.each do |node2|
+				method = node2.attributes['name']
+				result = node2.attributes['result']
+				status = node2.attributes['status']
+				if status == "unimplemented"
+					next
+				end
+				varargs68k = " "
+				args_a = Array.new
+				args_a << "struct #{struct} *Self"
+				nodes3 = node2.find('./*')
+				nodes3.each do |node3|
+					arg = node3.attributes['name']
+					type = node3.attributes['type']
+					case node3.name
+						when 'arg'
+							args_a << "#{type} #{arg}"
+						when 'vararg'
+							args_a << "..."
+							varargs68k = " VARARGS68K "
+					end
+				end
+				args_s = args_a.join(", ")
+				file.puts "extern #{result}#{varargs68k}#{prefix}#{method}(#{args_s});"
+			end
+			file.puts
+			file.puts "STATIC CONST APTR #{interface}_vectors[] ="
+			file.puts "{"
+			nodes2.each do |node2|
+				method = node2.attributes['name']
+				status = node2.attributes['status']
+				if status == "unimplemented"
+					file.puts "\tNULL,"
+					next
+				end
+				file.puts "\t#{prefix}#{method},"
+			end
+			file.puts "\t(APTR)-1"
+			file.puts "};"
+		end
+	end
+end
+
+if do_sfd
+	outfile = "#{name}_lib.sfd"
+	File.open(outfile, "w") do |file|
+		date = Time.now.strftime("%Y/%m/%d %H:%M:%S")
+		file.puts "==id $Id: #{outfile},v 1.0 #{date} noname Exp $"
+		file.puts "==base _#{basename}"
+		file.puts "==basetype struct #{basetype} *"
+		file.puts "==libname #{openname}"
+		if device
+			file.puts "==bias 42"
+		else
+			file.puts "==bias 30"
+		end
+		file.puts "==public"
+		nodes = doc.find('/library/include')
+		nodes.each do |node|
+			incname = node.content
+			file.puts "==include <#{incname}>"
+		end
+		nodes = doc.find('/library/interface')
+		nodes.each do |node|
+			interface = node.attributes['name']
+			if interface == "main"
+				i = 0
+				nodes2 = node.find('./method')
+				nodes2.each do |node2|
+					if i < 4 # skip first four methods (Obtain, Release, Expunge and Clone)
+						i += 1
+						next
+					end
+					method = node2.attributes['name']
+					result = node2.attributes['result']
+					args_a = Array.new
+					regs_a = Array.new
+					d_reg = 0
+					a_reg = 0
+					varargs = false
+					nodes3 = node2.find('./*')
+					nodes3.each do |node3|
+						arg = node3.attributes['name']
+						type = node3.attributes['type']
+						ptr_arg = false
+						case node3.name
+							when 'arg'
+								args_a << "#{type} #{arg}"
+								ptr_arg = type.include? "*"
+							when 'vararg'
+								args_a << "Tag tag1"
+								args_a << "..."
+								ptr_arg = true
+								varargs = true
+						end
+						if ptr_arg
+							regs_a << "a#{a_reg}"
+							a_reg += 1
+						else
+							regs_a << "d#{d_reg}"
+							d_reg += 1
+						end
+					end
+					if varargs
+						file.puts "==varargs"
+					end
+					args_s = args_a.join(", ")
+					regs_s = regs_a.join(",")
+					file.puts "#{result} #{method}(#{args_s}) (#{regs_s})"
+				end
+				break
+			end
+		end
+		file.puts "==end"
+	end
+end
+
+if do_stubs
+	createdir("include")
+	createdir("include/inline4")
+	outfile = "include/inline4/#{name}.h"
+	File.open(outfile, "w") do |file|
+		defname = "inline4/#{name}.h".gsub(/\W/, '_').upcase
+		file.puts "#ifndef #{defname}"
+		file.puts "#define #{defname}"
+		file.puts
+		file.puts "/* This file was created automatically by idltool v#{idltool_version}."
+		file.puts " * Do NOT edit by hand!"
+		file.puts " */"
+		file.puts
+		file.puts "#ifndef EXEC_TYPES_H"
+		file.puts "#include <exec/types.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_EXEC_H"
+		file.puts "#include <exec/exec.h>"
+		file.puts "#endif"
+		file.puts "#ifndef EXEC_INTERFACES_H"
+		file.puts "#include <exec/interfaces.h>"
+		file.puts "#endif"
+		file.puts
+		nodes = doc.find('/library/include')
+		nodes.each do |node|
+			incname = node.content
+			defname = incname.gsub(/\W/, '_').upcase
+			file.puts "#ifndef #{defname}"
+			file.puts "#include <#{incname}>"
+			file.puts "#endif"
+		end
+		file.puts "#include <interfaces/#{name}.h>"
+		file.puts
+		nodes = doc.find('/library/interface')
+		nodes.each do |node|
+			interface = node.attributes['name']
+			struct = node.attributes['struct']
+			global = node.attributes['global']
+			file.puts "/* Inline macros for Interface \"#{interface}\" */"
+			file.puts
+			file.puts "extern struct #{struct} *#{global};"
+			file.puts
+			i = 0
+			nodes2 = node.find('./method')
+			nodes2.each do |node2|
+				if i < 4 # skip first four methods (Obtain, Release, Expunge and Clone)
+					i += 1
+					next
+				end
+				method = node2.attributes['name']
+				result = node2.attributes['result']
+				if node2.find_first('./vararg').nil?
+					args_a = Array.new
+					args2_a = Array.new
+					nodes3 = node2.find('./arg')
+					nodes3.each do |node3|
+						arg = node3.attributes['name']
+						type = node3.attributes['type']
+						args_a << "#{type} #{arg}"
+						args2_a << "#{arg}"
+					end
+					args_s = args_a.join(", ")
+					args2_s = args2_a.join(", ")
+					file.puts "STATIC INLINE #{result} #{method} (#{args_s}) {"
+					if result == "void" or result == "VOID"
+						file.puts "\t#{global}->#{method}(#{args2_s});"
+					else
+						file.puts "\treturn #{global}->#{method}(#{args2_s});"
+					end
+					file.puts "}"
+				else
+					file.puts "#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || (__GNUC__ >= 3)"
+					file.puts "#define #{method}(...) #{global}->#{method}(__VA_ARGS__) "
+					file.puts "#elif (__GNUC__ == 2 && __GNUC_MINOR__ >= 95)"
+					file.puts "#define #{method}(vargs...) #{global}->#{method}(## vargs) "
+					file.puts "#endif"
+				end
+				file.puts
+			end
+		end
+		file.puts
+		defname = "inline4/#{name}.h".gsub(/\W/, '_').upcase
+		file.puts "#endif /* #{defname} */"
+	end
+end

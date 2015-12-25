@@ -1,0 +1,288 @@
+#!/usr/bin/ruby -w
+#
+# Copyright 2011 Fredrik Wikstrom. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS `AS IS'
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+require 'getoptlong'
+
+dtwrite_version='1.1'
+
+opts = GetoptLong.new(
+	[ '--help', '-h', GetoptLong::NO_ARGUMENT ],
+	[ '-o', GetoptLong::REQUIRED_ARGUMENT ]
+)
+
+infile = nil
+drecfile = nil
+outfile = nil
+show_version = true
+show_usage = false
+if ARGV.length == 0
+	show_usage = true
+end
+opts.each do |opt, arg|
+	case opt
+		when '--help'
+			show_usage = true
+		when '-o'
+			outfile = arg
+	end
+end
+if ARGV.length > 0
+	infile = ARGV.shift
+end
+
+if infile.nil?
+	show_usage = true
+end
+
+if show_version
+	puts "dtwrite v#{dtwrite_version} - Copyright (c) 2011 Fredrik Wikstrom"
+end
+if show_usage
+	puts "Usage: dtwrite [OPTIONS] [DTSOURCE]"
+	puts "Options:"
+	puts "  -h, --help Display this information"
+	puts "  -o         Name of output file"
+	exit
+end
+
+module IFF
+	class Chunk
+		attr_accessor :content
+		def initialize(id, content = "")
+			@id = id
+			@content = content
+		end
+		def to_s()
+			content = @content
+			header = [ @id, content.length ].pack("A4N")
+			if content.length.odd?
+				content << "\0"
+			end
+			return header + content
+		end
+	end
+	class FORM
+		attr_accessor :chunks
+		def initialize(type)
+			@type = type
+			@chunks = Array.new
+		end
+		def to_s()
+			content = ""
+			@chunks.each do |chunk|
+				content << chunk.to_s
+			end
+			header = [ "FORM", content.length, @type ].pack("A4NA4")
+			return header + content
+		end
+	end
+end
+
+class Tool
+	attr_accessor :flags, :program, :exists
+	def initialize()
+		@flags = nil
+		@program = nil
+		@exists = false
+	end
+end
+
+class Tag
+	attr_accessor :tag, :value
+	def initialize(tag, value)
+		@tag = tag
+		@value = value
+	end
+end
+
+name = File.basename(infile, File.extname(infile))
+basename = name.downcase
+version = nil
+revision = nil
+groupid = nil
+id = nil
+pattern = '#?'
+mask = ''
+flags = 16
+priority = 0
+tools = Hash.new
+1.upto(5) { |toolnumber| tools[toolnumber] = Tool.new }
+tags = Array.new
+File.open(infile, "r") do |file|
+	file.each do |line|
+		line.strip!
+		if line == '' or line[0].chr == '#'
+			next
+		end
+		opt, arg = line.split('=', 2)
+		case opt.downcase
+			#when 'filename'
+			#	if outfile.nil?
+			#		outfile = arg
+			#	end
+			when 'dtname'
+				name, basename = arg.split(',')
+			when 'version'
+				version, revision = arg.split('.')
+				version = version.to_i
+				revision = revision.to_i
+			when 'id'
+				groupid, id = arg.split(',')
+			when 'recog'
+				pattern, mask = arg.split(',')
+			when 'flags'
+				type, cs, priority = arg.split(',')
+				case type.downcase
+					when 'binary'
+						flags = 0
+					when 'ascii'
+						flags = 1
+					when 'iff'
+						flags = 2
+					when 'other'
+						flags = 3
+					else
+						flags = nil
+				end
+				cs.downcase!
+				if cs == 'case' or cs == 'y'
+					flags += 16
+				end
+				priority = priority.to_i
+			when 'code'
+				drecfile = File.join(File.dirname(infile), arg)
+			when 'tool'
+				type, name, kind = arg.split(',')
+				case type.downcase
+					when 'info'
+						toolnumber = 1
+					when 'browse'
+						toolnumber = 2
+					when 'edit'
+						toolnumber = 3
+					when 'print'
+						toolnumber = 4
+					when 'mail'
+						toolnumber = 5
+					else
+						toolnumber = nil
+				end
+				case kind.downcase
+					when 'cli'
+						tools[toolnumber].flags = 1
+					when 'workbench'
+						tools[toolnumber].flags = 2
+					when 'arexx'
+						tools[toolnumber].flags = 3
+					else
+						tools[toolnumber].flags = nil
+				end
+				tools[toolnumber].program = name
+				tools[toolnumber].exists = true
+			when 'tag'
+				tag, value = arg.split(',')
+				if tag[0].chr == '$'
+					tag = tag[1..-1].to_i(16)
+				else
+					tag = tag.to_i
+				end
+				if value[0].chr == '$'
+					value = value[1..-1].to_i(16)
+				else
+					value = value.to_i
+				end
+				tags << Tag.new(tag, value)
+		end
+	end
+end
+if outfile.nil?
+	outfile = File.basename(infile, File.extname(infile))
+end
+
+binmask = ''
+escchr = false
+i = 0
+if mask.nil?
+	mask = ''
+end
+while i < mask.length
+	c = mask[i].chr
+	i += 1
+	if not escchr
+		if c == '\\'
+			escchr = true
+		else
+			binmask << "\x00#{c}"
+		end
+	else
+		case c
+			when '?'
+				binmask << "\xFF\xFF"
+			when '\\'
+				binmask << "\x00\\"
+			when '$'
+				c = mask[i, 2].to_i(16).to_s
+				i += 2
+				binmask << "\x00#{c}"
+			else
+				binmask << "\x00#{c}"
+		end
+		escchr = false
+	end
+end
+
+File.open(outfile, "wb") do |file|
+	form = IFF::FORM.new("DTYP")
+	if not version.nil?
+		time = Time.now
+		vers = "#{name} #{version}.#{revision}"
+		date = "#{time.mday}.#{time.month}.#{time.year}"
+		form.chunks << IFF::Chunk.new("FVER", "$VER: #{vers} (#{date})\0")
+	end
+	form.chunks << IFF::Chunk.new("DTHD", [
+		32+binmask.length, 32+binmask.length+name.length+1,
+		32+binmask.length+name.length+basename.length+2, 32,
+		groupid, id, binmask.length, 0, flags, priority ].pack("NNNNA4A4nnnn") <<
+		"#{binmask}#{name}\0#{basename}\0#{pattern}\0")
+	if not drecfile.nil?
+		form.chunks << IFF::Chunk.new("DTCD", File.open(drecfile, "rb") { |f| f.read })
+	end
+	1.upto(5) do |toolnumber|
+		if tools[toolnumber].exists
+			form.chunks << IFF::Chunk.new("DTTL", [ toolnumber, tools[toolnumber].flags,
+			8 ].pack("nnN") << "#{tools[toolnumber].program}\0")
+		end
+	end
+	if tags.count > 0
+		chunk = IFF::Chunk.new("DTTG")
+		tags.each do |tag|
+			chunk.content << [ tag.tag, tag.value ].pack("NN")
+		end
+	end
+	file.write form.to_s
+end
+

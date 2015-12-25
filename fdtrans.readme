@@ -1,0 +1,38 @@
+Short:        FDTrans replacement written in ruby
+Author:       Fredrik Wikstrom
+Uploader:     Fredrik Wikstrom <fredrik@a500.org>
+Type:         dev/c
+Version:      1.3
+Architecture: generic
+
+Requirements:
+ - ruby >= 1.8
+
+Installation:
+
+sudo cp fdtrans /usr/local/bin/
+
+Usage:
+
+fdtrans [OPTIONS] [SFDFILE]
+Options:
+  -h, --help                Display this information
+  -i, --struct <structname> Interface struct name
+  -l, --library <openname>  Name for use with OpenLibrary()
+  -x, --xml                 Generate .xml file
+  -s, --stubs               Generate PPC->M68K cross-call stubs
+  -c, --c68k                Generate M68K->PPC cross-call stubs
+  -4, --inline4             Generate special inline4 file for using M68K
+                            libraries without a PPC interface
+
+Changes:
+
+1.3 (2-Jul-2011)
+ - Fixed a couple of compiler warnings in generated M68k->PPC stubs code
+
+1.2 (4-Jun-2011)
+ - Fixed a bug in generated M68k->PPC stubs code
+
+1.1 (12-May-2011)
+ - First released version
+

@@ -1,6 +1,6 @@
 #!/usr/bin/ruby -w
 #
-# Copyright 2011 Fredrik Wikstrom. All rights reserved.
+# Copyright 2011-2016 Fredrik Wikstrom. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -27,7 +27,7 @@
 
 require 'getoptlong'
 
-bumprev_version='1.2'
+bumprev_version='1.3'
 
 opts = GetoptLong.new(
 	[ '--help', '-h', GetoptLong::NO_ARGUMENT ],
@@ -68,7 +68,7 @@ if ARGV.length > 0
 end
 
 if show_version
-	puts "bumprev v#{bumprev_version} - Copyright (c) 2011-2013 Fredrik Wikstrom"
+	puts "bumprev v#{bumprev_version} - Copyright (c) 2011-2016 Fredrik Wikstrom"
 end
 if show_usage
 	puts "Usage: bumprev [OPTIONS] [VERSION] [BASENAME]"
@@ -93,7 +93,7 @@ if not basename
 end
 
 if version == 0
-	if File.exists?("#{basename}_rev.ver")
+	if File.exist?("#{basename}_rev.ver")
 		version = File.read("#{basename}_rev.ver").to_i
 	else
 		version = 1
@@ -101,7 +101,7 @@ if version == 0
 end
 
 if revision == 0
-	if File.exists?("#{basename}_rev.rev")
+	if File.exist?("#{basename}_rev.rev")
 		revision = File.read("#{basename}_rev.rev").to_i
 	end
 	revision += 1

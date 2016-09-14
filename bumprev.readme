@@ -2,7 +2,7 @@ Short:        BumpRev replacement written in ruby
 Author:       Fredrik Wikstrom
 Uploader:     Fredrik Wikstrom <fredrik@a500.org>
 Type:         dev/c
-Version:      1.2
+Version:      1.3
 Architecture: generic
 
 Requirements:
@@ -23,6 +23,9 @@ Options:
   -r=<rev>  --revision=<rev>   Revision number
 
 Changes:
+
+1.3 (14-Sep-2016)
+ - Replaced deprecated "exists?" with "exist?".
 
 1.2 (3-Jun-2013)
  - Now uses TABs instead of spaces for compatibility with MakeDT.rexx

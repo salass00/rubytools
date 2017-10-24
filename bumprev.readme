@@ -24,13 +24,18 @@ Options:
 
 Changes:
 
-1.3 (14-Sep-2016)
- - Replaced deprecated "exists?" with "exist?".
+1.3 (14.9.2016)
 
-1.2 (3-Jun-2013)
- - Now uses TABs instead of spaces for compatibility with MakeDT.rexx
-   BumpRevFile option
+- Replaced deprecated "exists?" with "exist?".
 
-1.1 (8-May-2011)
- - First released version
+
+1.2 (3.6.2013)
+
+- Now uses TABs instead of spaces for compatibility with MakeDT.rexx
+  BumpRevFile option.
+
+
+1.1 (8.5.2011)
+
+- First released version.
 

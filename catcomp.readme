@@ -2,7 +2,7 @@ Short:        CatComp replacement written in ruby
 Author:       Fredrik Wikstrom
 Uploader:     Fredrik Wikstrom <fredrik@a500.org>
 Type:         dev/c
-Version:      1.4
+Version:      1.5
 Architecture: generic
 
 Requirements:
@@ -23,16 +23,29 @@ Options:
 
 Changes:
 
-1.4 (7-Feb-2013)
- - Fixed a bug when that would produce 0 id numbers when no string id was
-   specified but minimum/maximum length was
+1.5 (24.10.2017)
 
-1.3 (29-Jan-2013)
- - Now uses a custom unescape function instead of the ugly eval hack
+- Fixed size of the FORM chunk in generated catalog files (the size did not
+  include the space taken up by the type ID).
 
-1.2 (1-Jun-2011)
- - Added ability to generate .catalog files
 
-1.1 (8-May-2011)
- - First released version
+1.4 (7.2.2013)
+
+- Fixed a bug that would produce zero id numbers when no string id was
+  specified but either minimum or maximum length was specified.
+
+
+1.3 (29.1.2013)
+
+- Now uses a custom unescape function instead of the ugly eval hack.
+
+
+1.2 (1.6.2011)
+
+- Added ability to generate catalog files.
+
+
+1.1 (8.5.2011)
+
+- First released version.
 

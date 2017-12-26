@@ -123,6 +123,7 @@ name = File.basename(infile, File.extname(infile))
 basename = name.downcase
 version = nil
 revision = nil
+date = nil
 groupid = nil
 id = nil
 pattern = '#?'
@@ -146,6 +147,23 @@ File.open(infile, "r") do |file|
 			#	end
 			when 'dtname'
 				name, basename = arg.split(',')
+			when 'bumprevfile'
+				File.open(arg, "r") do |bumprevfile|
+					bumprevfile.each do |bumprevline|
+						bumprevline.lstrip!
+						if bumprevline[0, 8] == '#define '
+							macro, value = bumprevline[8...-1].squeeze("\t").split("\t")
+							case macro
+								when 'VERSION'
+									version = value.to_i
+								when 'REVISION'
+									revision = value.to_i
+								when 'DATE'
+									date = value[1...-1]
+							end
+						end
+					end
+				end
 			when 'version'
 				version, revision = arg.split('.')
 				version = version.to_i
@@ -260,7 +278,9 @@ File.open(outfile, "wb") do |file|
 	if not version.nil?
 		time = Time.now
 		vers = "#{name} #{version}.#{revision}"
-		date = "#{time.mday}.#{time.month}.#{time.year}"
+		if date.nil?
+			date = "#{time.mday}.#{time.month}.#{time.year}"
+		end
 		form.chunks << IFF::Chunk.new("FVER", "$VER: #{vers} (#{date})\0")
 	end
 	if not name.length.odd?

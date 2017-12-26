@@ -283,6 +283,7 @@ File.open(outfile, "wb") do |file|
 		end
 		form.chunks << IFF::Chunk.new("FVER", "$VER: #{vers} (#{date})\0")
 	end
+	form.chunks << IFF::Chunk.new("NAME", File.basename(outfile) << "\0")
 	if not name.length.odd?
 		name << "\0"
 	end

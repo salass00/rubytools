@@ -245,7 +245,7 @@ while i < mask.length
 			when '\\'
 				binmask << "\x00\\"
 			when '$'
-				c = mask[i, 2].to_i(16).to_s
+				c = [ mask[i, 2].to_i(16) ].pack("C")
 				i += 2
 				binmask << "\x00#{c}"
 			else
@@ -263,10 +263,19 @@ File.open(outfile, "wb") do |file|
 		date = "#{time.mday}.#{time.month}.#{time.year}"
 		form.chunks << IFF::Chunk.new("FVER", "$VER: #{vers} (#{date})\0")
 	end
+	if not name.length.odd?
+		name << "\0"
+	end
+	if not basename.length.odd?
+		basename << "\0"
+	end
+	if not pattern.length.odd?
+		pattern << "\0"
+	end
 	form.chunks << IFF::Chunk.new("DTHD", [
 		32+binmask.length, 32+binmask.length+name.length+1,
 		32+binmask.length+name.length+basename.length+2, 32,
-		groupid, id, binmask.length, 0, flags, priority ].pack("NNNNA4A4nnnn") <<
+		groupid, id, binmask.length / 2, 0, flags, priority ].pack("NNNNa4a4nnnn") <<
 		"#{binmask}#{name}\0#{basename}\0#{pattern}\0")
 	if not drecfile.nil?
 		form.chunks << IFF::Chunk.new("DTCD", File.open(drecfile, "rb") { |f| f.read })
